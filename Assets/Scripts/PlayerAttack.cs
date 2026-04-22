@@ -21,9 +21,12 @@ public class PlayerAttack : MonoBehaviour
     private PlayerMovement movement;
     private PlayerStamina stamina;
     private PlayerInputActions inputActions;
+    private SpriteRenderer sr;
 
     private bool isAttacking = false;
     private int currentAttackDirection = 0;
+
+    private Vector3 sidePointBaseLocalPos;
 
     public bool IsAttacking => isAttacking;
 
@@ -33,6 +36,10 @@ public class PlayerAttack : MonoBehaviour
         movement = GetComponent<PlayerMovement>();
         stamina = GetComponent<PlayerStamina>();
         inputActions = new PlayerInputActions();
+        sr = GetComponent<SpriteRenderer>();
+
+        if (attackPointSide != null)
+            sidePointBaseLocalPos = attackPointSide.localPosition;
     }
 
     private void OnEnable()
@@ -48,6 +55,11 @@ public class PlayerAttack : MonoBehaviour
             inputActions.Player.Attack.performed -= OnAttackPerformed;
             inputActions.Disable();
         }
+    }
+
+    private void LateUpdate()
+    {
+        UpdateAttackPointSideFlip();
     }
 
     private void OnAttackPerformed(InputAction.CallbackContext context)
@@ -94,7 +106,13 @@ public class PlayerAttack : MonoBehaviour
                 break;
         }
 
-        yield return new WaitForSeconds(attackLockTime);
+        yield return new WaitForSeconds(0.08f);
+
+        DealDamage();
+
+        float remain = attackLockTime - 0.08f;
+        if (remain > 0f)
+            yield return new WaitForSeconds(remain);
 
         Vector2 moveInput = inputActions.Player.Move.ReadValue<Vector2>();
         bool isMoving = moveInput.sqrMagnitude > 0.01f;
@@ -146,11 +164,9 @@ public class PlayerAttack : MonoBehaviour
             float y = moveInput.y;
 
             if (Mathf.Abs(x) > Mathf.Abs(y))
-            {
-                return 1; // Side
-            }
+                return 1;
 
-            return y > 0 ? 2 : 0; // Up : Down
+            return y > 0 ? 2 : 0;
         }
 
         if (movement != null)
@@ -168,11 +184,49 @@ public class PlayerAttack : MonoBehaviour
             return;
         }
 
-        Collider2D[] hitEnemies = Physics2D.OverlapCircleAll(
-            currentAttackPoint.position,
-            attackRange,
+        Vector2 hitCenter;
+        Vector2 capsuleSize;
+        CapsuleDirection2D capsuleDirection;
+
+        switch (currentAttackDirection)
+        {
+            case 0: // Down
+                hitCenter = currentAttackPoint.position;
+                capsuleSize = new Vector2(0.95f, 1.1f);
+                capsuleDirection = CapsuleDirection2D.Vertical;
+                break;
+
+            case 1: // Side
+                hitCenter = GetSideAttackCenter();
+                capsuleSize = new Vector2(1.2f, 0.85f);
+                capsuleDirection = CapsuleDirection2D.Horizontal;
+                break;
+
+            case 2: // Up
+                hitCenter = currentAttackPoint.position;
+                capsuleSize = new Vector2(0.95f, 1.1f);
+                capsuleDirection = CapsuleDirection2D.Vertical;
+                break;
+
+            default:
+                hitCenter = currentAttackPoint.position;
+                capsuleSize = new Vector2(1f, 1f);
+                capsuleDirection = CapsuleDirection2D.Vertical;
+                break;
+        }
+
+        Collider2D[] hitEnemies = Physics2D.OverlapCapsuleAll(
+            hitCenter,
+            capsuleSize,
+            capsuleDirection,
+            0f,
             enemyLayer
         );
+
+        Debug.Log("DEAL DAMAGE");
+        Debug.Log("Dir = " + currentAttackDirection);
+        Debug.Log("HitCenter = " + hitCenter);
+        Debug.Log("Hit count = " + hitEnemies.Length);
 
         if (hitEnemies.Length == 0)
         {
@@ -180,19 +234,34 @@ public class PlayerAttack : MonoBehaviour
             return;
         }
 
-        foreach (Collider2D enemy in hitEnemies)
-        {
-            if (enemy.gameObject == gameObject)
-                continue;
+       foreach (Collider2D enemy in hitEnemies)
+{
+    if (enemy.gameObject == gameObject)
+        continue;
 
-            Debug.Log("✅ Đánh trúng: " + enemy.name);
+    Debug.Log("✅ Đánh trúng: " + enemy.name);
 
-            EnemyDummy dummy = enemy.GetComponent<EnemyDummy>();
-            if (dummy != null)
-            {
-                dummy.TakeDamage(attackDamage);
-            }
-        }
+    EnemyDummy dummy = enemy.GetComponentInParent<EnemyDummy>();
+    if (dummy != null)
+    {
+        dummy.TakeDamage(attackDamage);
+        continue;
+    }
+
+    EnemyMeleeAI meleeAI = enemy.GetComponentInParent<EnemyMeleeAI>();
+    if (meleeAI != null)
+    {
+        meleeAI.TakeDamage(attackDamage);
+        continue;
+    }
+
+    EnemyRangedAI rangedAI = enemy.GetComponentInParent<EnemyRangedAI>();
+    if (rangedAI != null)
+    {
+        rangedAI.TakeDamage(attackDamage);
+        continue;
+    }
+}
     }
 
     private Transform GetCurrentAttackPoint()
@@ -210,17 +279,75 @@ public class PlayerAttack : MonoBehaviour
         }
     }
 
+    private Vector2 GetSideAttackCenter()
+    {
+        if (attackPointSide == null)
+            return transform.position;
+
+        float offsetX = Mathf.Abs(sidePointBaseLocalPos.x);
+        float offsetY = sidePointBaseLocalPos.y;
+
+        // Theo PlayerMovement hiện tại:
+        // sr.flipX = true  => quay phải
+        // sr.flipX = false => quay trái
+        bool facingRight = sr != null && sr.flipX;
+
+        Vector3 localOffset = new Vector3(
+            facingRight ? offsetX : -offsetX,
+            offsetY,
+            0f
+        );
+
+        return transform.TransformPoint(localOffset);
+    }
+
+    private void UpdateAttackPointSideFlip()
+    {
+        if (attackPointSide == null)
+            return;
+
+        float offsetX = Mathf.Abs(sidePointBaseLocalPos.x);
+        float offsetY = sidePointBaseLocalPos.y;
+        float offsetZ = sidePointBaseLocalPos.z;
+
+        // Theo PlayerMovement hiện tại:
+        // sr.flipX = true  => quay phải
+        // sr.flipX = false => quay trái
+        bool facingRight = sr != null && sr.flipX;
+
+        attackPointSide.localPosition = new Vector3(
+            facingRight ? offsetX : -offsetX,
+            offsetY,
+            offsetZ
+        );
+    }
+
     private void OnDrawGizmosSelected()
     {
         Gizmos.color = Color.red;
 
         if (attackPointDown != null)
-            Gizmos.DrawWireSphere(attackPointDown.position, attackRange);
-
-        if (attackPointSide != null)
-            Gizmos.DrawWireSphere(attackPointSide.position, attackRange);
+            Gizmos.DrawWireCube(attackPointDown.position, new Vector3(0.95f, 1.1f, 0f));
 
         if (attackPointUp != null)
-            Gizmos.DrawWireSphere(attackPointUp.position, attackRange);
+            Gizmos.DrawWireCube(attackPointUp.position, new Vector3(0.95f, 1.1f, 0f));
+
+        if (attackPointSide != null)
+        {
+            SpriteRenderer spriteRenderer = GetComponent<SpriteRenderer>();
+
+            float baseX = Mathf.Abs(attackPointSide.localPosition.x);
+            float baseY = attackPointSide.localPosition.y;
+
+            // Đồng bộ đúng với PlayerMovement:
+            // flipX true = quay phải
+            bool facingRight = spriteRenderer != null && spriteRenderer.flipX;
+
+            Vector3 sideWorldPos = transform.TransformPoint(
+                new Vector3(facingRight ? baseX : -baseX, baseY, 0f)
+            );
+
+            Gizmos.DrawWireCube(sideWorldPos, new Vector3(1.2f, 0.85f, 0f));
+        }
     }
 }
